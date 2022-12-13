@@ -1,9 +1,17 @@
 """check_dancer_points: Check dancer points with the World Swing Dance Council site."""
 from typing import Union
-from playwright.sync_api import Playwright, sync_playwright, TimeoutError
+from playwright.sync_api import (
+    sync_playwright,
+    TimeoutError,
+    Page,
+    Browser,
+    BrowserContext,
+    Playwright,
+)
 import json
 from flask import Flask, request
 
+TIMEOUT = 2000
 app = Flask(__name__)
 
 
@@ -16,15 +24,8 @@ def points_route() -> dict:
     )
 
 
-def check_points_inner(
-    playwright: Playwright, name_or_id: str
-) -> dict[str, Union[int, str, None]]:
+def check_points_inner(page: Page, name_or_id: str) -> dict[str, Union[int, str, None]]:
     """Check dancer points with the World Swing Dance Council site."""
-    # Set up playwright
-    browser = playwright.chromium.launch(headless=True)
-    context = browser.new_context()
-    page = context.new_page()
-    page.goto("https://www.worldsdc.com/registry-points/")
     # Search for dancer
     i_frame = page.frame_locator('iframe[name="myiFrame"]')
     search_bar = i_frame.get_by_placeholder("Search by Name or WSDC #")
@@ -32,7 +33,7 @@ def check_points_inner(
     search_bar.fill(name_or_id)
     search_results = i_frame.locator(".tt-selectable")
     try:
-        search_results.first.click(timeout=1000)
+        search_results.first.click(timeout=TIMEOUT)
     except TimeoutError:
         return {"error": "No results found."}
     # Scrape results
@@ -45,9 +46,6 @@ def check_points_inner(
     upper_level = upper_level_loc.inner_text() if upper_level_loc.is_visible() else None
     div_and_points = results.locator("h3").first.inner_text()
     highest_pointed_division, points_in_division, _ = div_and_points.split(" ")
-    # Clean up playwright
-    context.close()
-    browser.close()
     return {
         "name": name,
         "id": int(dancer_id),
@@ -58,10 +56,29 @@ def check_points_inner(
     }
 
 
+def setup_playwright(playwright: Playwright) -> tuple[Browser, BrowserContext, Page]:
+    """Set up playwright."""
+    browser = playwright.chromium.launch(headless=True)
+    context = browser.new_context()
+    page = context.new_page()
+    page.goto("https://www.worldsdc.com/registry-points/")
+    return browser, context, page
+
+
+def teardown_playwright(browser: Browser, context: BrowserContext) -> None:
+    """Tear down playwright."""
+    context.close()
+    browser.close()
+
+
 def check_points(name_or_id: str) -> dict[str, Union[int, str, None]]:
     """Check dancer points with the World Swing Dance Council site."""
     with sync_playwright() as playwright:
-        return check_points_inner(playwright, name_or_id)
+        browser, context, page = setup_playwright(playwright)
+        try:
+            return check_points_inner(page, name_or_id)
+        finally:
+            teardown_playwright(browser, context)
 
 
 if __name__ == "__main__":  # pragma: no cover
